@@ -132,24 +132,48 @@ public class MyForm extends Application {
                     Vertex[] transformed = new Vertex[poly.length];
                     for (int i = 0; i < poly.length; i++) {
                         Vector transformedValue = transformationMatrix.multiply(rotation).multiply(poly[i].value);
-                        transformed[i] = new Vertex(transformedValue, poly[i].normal);
+                        Vector transformedNormal = rotation.multiply(poly[i].normal).normalize();  // трансформируем нормаль только вращением
+                        transformed[i] = new Vertex(transformedValue, transformedNormal);
                     }
                     return transformed;
                 })
                 .collect(Collectors.toList());
     }
 
-    private void renderModel(GraphicsContext gc) {
-        // Создаем изменяемый список фигур
-        List<Figure> figures = new ArrayList<>(List.of(pyramid, cone, star));
-        figures.sort((f1, f2) -> Double.compare(f2.getAverageDepth(), f1.getAverageDepth())); // от дальних к ближним
 
-        for (Figure figure : figures) {
+    private void renderModel(GraphicsContext gc) {
+        List<PolygonWithColor> allPolygons = new ArrayList<>();
+
+        for (Figure figure : List.of(pyramid, cone, star)) {
             for (Vertex[] polygon : figure.transformedPolygons) {
-                phongShading(polygon, gc, figure.color);
+                double avgDepth = 0;
+                for (Vertex v : polygon) {
+                    avgDepth += v.value.getZ();
+                }
+                avgDepth /= polygon.length;
+                allPolygons.add(new PolygonWithColor(polygon, figure.color, avgDepth));
             }
         }
+
+        allPolygons.sort((p1, p2) -> Double.compare(p2.avgDepth, p1.avgDepth));
+
+        for (PolygonWithColor p : allPolygons) {
+            phongShading(p.polygon, gc, p.color);
+        }
     }
+
+    private static class PolygonWithColor {
+        Vertex[] polygon;
+        Color color;
+        double avgDepth;
+
+        PolygonWithColor(Vertex[] polygon, Color color, double avgDepth) {
+            this.polygon = polygon;
+            this.color = color;
+            this.avgDepth = avgDepth;
+        }
+    }
+
 
     private void phongShading(Vertex[] polygon, GraphicsContext gc, Color baseColor) {
         Vector lightDir = new Vector(0, 0, -1).normalize();

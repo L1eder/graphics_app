@@ -37,14 +37,4 @@ public class Vector {
                 firstVector.getX() * secondVector.getY() - firstVector.getY() * secondVector.getX()
         );
     }
-
-    public static Vector multiply(Matrix matrix, Vector vector) {
-        double[] result = new double[4];
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                result[i] += matrix.get(i, j) * vector.vector[j];
-            }
-        }
-        return new Vector(result[0], result[1], result[2]);
-    }
 }
