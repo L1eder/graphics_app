@@ -23,6 +23,7 @@ public class MyForm extends Application {
     private Figure star = new Figure(Color.rgb(255, 255, 0));
     private double rotationAngle = 0;
     private Matrix transformationMatrix;
+    private ZBuffer zBuffer;
 
     public static void main(String[] args) {
         launch(args);
@@ -33,6 +34,9 @@ public class MyForm extends Application {
         primaryStage.setTitle("3D Figure Renderer");
         Canvas canvas = new Canvas(1280, 760);
         GraphicsContext gc = canvas.getGraphicsContext2D();
+
+        // Инициализируем Z-буфер
+        zBuffer = new ZBuffer((int)canvas.getWidth(), (int)canvas.getHeight());
 
         loadFile();
         setupTransformationMatrix();
@@ -57,6 +61,7 @@ public class MyForm extends Application {
 
     private void draw(GraphicsContext gc) {
         gc.clearRect(0, 0, gc.getCanvas().getWidth(), gc.getCanvas().getHeight());
+        zBuffer.clear(); // Очищаем Z-буфер перед новым рендерингом
 
         applyTransformations();
         renderModel(gc);
@@ -118,7 +123,6 @@ public class MyForm extends Application {
         transformationMatrix = viewport.multiply(projection).multiply(lookAt).multiply(scale);
     }
 
-
     private void applyTransformations() {
         Matrix rotation = Matrix.createYSpinMatrix(rotationAngle);
 
@@ -133,14 +137,13 @@ public class MyForm extends Application {
                     Vertex[] transformed = new Vertex[poly.length];
                     for (int i = 0; i < poly.length; i++) {
                         Vector transformedValue = transformationMatrix.multiply(rotation).multiply(poly[i].value);
-                        Vector transformedNormal = rotation.multiply(poly[i].normal).normalize();  // трансформируем нормаль только вращением
+                        Vector transformedNormal = rotation.multiply(poly[i].normal).normalize();
                         transformed[i] = new Vertex(transformedValue, transformedNormal);
                     }
                     return transformed;
                 })
                 .collect(Collectors.toList());
     }
-
 
     private void renderModel(GraphicsContext gc) {
         List<PolygonWithColor> allPolygons = new ArrayList<>();
@@ -156,10 +159,11 @@ public class MyForm extends Application {
             }
         }
 
+        // Сортировка по глубине для оптимизации
         allPolygons.sort((p1, p2) -> Double.compare(p2.avgDepth, p1.avgDepth));
 
         for (PolygonWithColor p : allPolygons) {
-            phongShading(p.polygon, gc, p.color);
+            drawPolygonWithZBuffer(p.polygon, gc, p.color);
         }
     }
 
@@ -175,35 +179,140 @@ public class MyForm extends Application {
         }
     }
 
+    // Новый метод для отрисовки полигона с Z-буфером и освещением по Гуро
+    private void drawPolygonWithZBuffer(Vertex[] polygon, GraphicsContext gc, Color baseColor) {
+        if (polygon.length < 3) return;
 
-    private void phongShading(Vertex[] polygon, GraphicsContext gc, Color baseColor) {
+        // Находим минимальные и максимальные координаты для ограничивающего прямоугольника
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+
+        for (Vertex v : polygon) {
+            int x = (int)v.value.getX();
+            int y = (int)v.value.getY();
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+        }
+
+        // Ограничиваем область сканирования
+        minX = Math.max(0, minX);
+        maxX = Math.min((int)gc.getCanvas().getWidth() - 1, maxX);
+        minY = Math.max(0, minY);
+        maxY = Math.min((int)gc.getCanvas().getHeight() - 1, maxY);
+
+        // Источник света
         Vector lightDir = new Vector(0, 0, -1).normalize();
 
-        Vector avgNormal = new Vector(0, 0, 0);
-        for (Vertex v : polygon) {
-            avgNormal = new Vector(
-                    avgNormal.getX() + v.normal.getX(),
-                    avgNormal.getY() + v.normal.getY(),
-                    avgNormal.getZ() + v.normal.getZ()
-            );
-        }
-        avgNormal = avgNormal.normalize();
-
-        double intensity = Math.max(0, avgNormal.getX() * lightDir.getX() +
-                avgNormal.getY() * lightDir.getY() +
-                avgNormal.getZ() * lightDir.getZ());
-
-        Color shadedColor = baseColor.deriveColor(0, 1, intensity, 1);
-
-        double[] xPoints = new double[polygon.length];
-        double[] yPoints = new double[polygon.length];
+        // Для освещения по Гуро вычисляем интенсивность для каждой вершины
+        double[] intensities = new double[polygon.length];
         for (int i = 0; i < polygon.length; i++) {
-            xPoints[i] = polygon[i].value.getX();
-            yPoints[i] = polygon[i].value.getY();
+            Vector normal = polygon[i].normal.normalize();
+            intensities[i] = Math.max(0, normal.getX() * lightDir.getX() +
+                    normal.getY() * lightDir.getY() +
+                    normal.getZ() * lightDir.getZ());
         }
 
-        gc.setFill(shadedColor);
-        gc.fillPolygon(xPoints, yPoints, polygon.length);
+        // Сканируем область полигона
+        for (int y = minY; y <= maxY; y++) {
+            for (int x = minX; x <= maxX; x++) {
+                if (isPointInsidePolygon(x, y, polygon)) {
+                    // Интерполируем Z-координату
+                    double z = interpolateZ(x, y, polygon);
+                    if (zBuffer.checkAndUpdate(x, y, z)) {
+                        // Интерполируем интенсивность для освещения по Гуро
+                        double intensity = interpolateIntensity(x, y, polygon, intensities);
+                        Color shadedColor = baseColor.deriveColor(0, 1, intensity, 1);
+                        gc.setFill(shadedColor);
+                        gc.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+        }
     }
 
+    // Проверка, находится ли точка внутри полигона
+    private boolean isPointInsidePolygon(int x, int y, Vertex[] polygon) {
+        int i, j;
+        boolean inside = false;
+        for (i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            if (((polygon[i].value.getY() > y) != (polygon[j].value.getY() > y)) &&
+                    (x < (polygon[j].value.getX() - polygon[i].value.getX()) * (y - polygon[i].value.getY()) /
+                            (polygon[j].value.getY() - polygon[i].value.getY()) + polygon[i].value.getX())) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // Интерполяция Z-координаты
+    private double interpolateZ(int x, int y, Vertex[] polygon) {
+        // Используем барицентрические координаты для интерполяции (работает только для треугольников)
+        if (polygon.length != 3) {
+            // Для полигонов с количеством вершин != 3 возвращаем среднее значение
+            double avgZ = 0;
+            for (Vertex v : polygon) {
+                avgZ += v.value.getZ();
+            }
+            return avgZ / polygon.length;
+        }
+
+        double totalArea = calculateTriangleArea(polygon[0], polygon[1], polygon[2]);
+        if (totalArea == 0) return polygon[0].value.getZ();
+
+        double area1 = calculateTriangleArea(new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)),
+                polygon[1], polygon[2]);
+        double area2 = calculateTriangleArea(polygon[0],
+                new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)),
+                polygon[2]);
+        double area3 = calculateTriangleArea(polygon[0], polygon[1],
+                new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)));
+
+        double w1 = area1 / totalArea;
+        double w2 = area2 / totalArea;
+        double w3 = area3 / totalArea;
+
+        return w1 * polygon[0].value.getZ() +
+                w2 * polygon[1].value.getZ() +
+                w3 * polygon[2].value.getZ();
+    }
+
+    // Интерполяция интенсивности освещения
+    private double interpolateIntensity(int x, int y, Vertex[] polygon, double[] intensities) {
+        if (polygon.length != 3) {
+            // Для полигонов с количеством вершин != 3 возвращаем среднее значение
+            double avgIntensity = 0;
+            for (double intensity : intensities) {
+                avgIntensity += intensity;
+            }
+            return avgIntensity / intensities.length;
+        }
+
+        double totalArea = calculateTriangleArea(polygon[0], polygon[1], polygon[2]);
+        if (totalArea == 0) return intensities[0];
+
+        double area1 = calculateTriangleArea(new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)),
+                polygon[1], polygon[2]);
+        double area2 = calculateTriangleArea(polygon[0],
+                new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)),
+                polygon[2]);
+        double area3 = calculateTriangleArea(polygon[0], polygon[1],
+                new Vertex(new Vector(x, y, 0), new Vector(0, 0, 0)));
+
+        double w1 = area1 / totalArea;
+        double w2 = area2 / totalArea;
+        double w3 = area3 / totalArea;
+
+        return w1 * intensities[0] + w2 * intensities[1] + w3 * intensities[2];
+    }
+
+    // Вычисление площади треугольника
+    private double calculateTriangleArea(Vertex v1, Vertex v2, Vertex v3) {
+        double x1 = v2.value.getX() - v1.value.getX();
+        double y1 = v2.value.getY() - v1.value.getY();
+        double x2 = v3.value.getX() - v1.value.getX();
+        double y2 = v3.value.getY() - v1.value.getY();
+        return Math.abs(x1 * y2 - x2 * y1) / 2.0;
+    }
 }
