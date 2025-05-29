@@ -1,5 +1,6 @@
 package com.example.course;
 
+import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.scene.Group;
 import javafx.scene.Scene;
@@ -22,6 +23,7 @@ public class MyForm extends Application {
     private Figure cone = new Figure(Color.rgb(0, 255, 0));
     private Figure star = new Figure(Color.rgb(255, 255, 0));
     private double rotationAngle = 0;
+    private double rotationSpeed = 0; // Скорость поворота (градусов в секунду)
     private Matrix transformationMatrix;
     private ZBuffer zBuffer;
 
@@ -36,18 +38,42 @@ public class MyForm extends Application {
         GraphicsContext gc = canvas.getGraphicsContext2D();
 
         // Инициализируем Z-буфер
-        zBuffer = new ZBuffer((int)canvas.getWidth(), (int)canvas.getHeight());
+        zBuffer = new ZBuffer((int) canvas.getWidth(), (int) canvas.getHeight());
 
         loadFile();
         setupTransformationMatrix();
 
+        // Используем AnimationTimer для плавного обновления анимации
+        AnimationTimer timer = new AnimationTimer() {
+            private double lastTime = 0;
+
+            @Override
+            public void handle(long now) {
+                double currentTime = now / 1_000_000_000.0; // Время в секундах
+                if (lastTime == 0) lastTime = currentTime;
+                double deltaTime = currentTime - lastTime;
+                lastTime = currentTime;
+
+                // Обновляем угол поворота на основе скорости и времени
+                rotationAngle += rotationSpeed * deltaTime;
+                draw(gc);
+            }
+        };
+        timer.start();
+
+        // Управление скоростью поворота через клавиши
         canvas.setOnKeyPressed(event -> {
             if (event.getCode() == KeyCode.D || event.getCode() == KeyCode.RIGHT) {
-                rotationAngle -= 5;
-                draw(gc);
+                rotationSpeed = -60; // Скорость поворота вправо (градусов/сек)
             } else if (event.getCode() == KeyCode.A || event.getCode() == KeyCode.LEFT) {
-                rotationAngle += 5;
-                draw(gc);
+                rotationSpeed = 60; // Скорость поворота влево (градусов/сек)
+            }
+        });
+
+        canvas.setOnKeyReleased(event -> {
+            if (event.getCode() == KeyCode.D || event.getCode() == KeyCode.RIGHT ||
+                    event.getCode() == KeyCode.A || event.getCode() == KeyCode.LEFT) {
+                rotationSpeed = 0; // Останавливаем поворот при отпускании клавиши
             }
         });
 
@@ -124,19 +150,22 @@ public class MyForm extends Application {
     }
 
     private void applyTransformations() {
+        // Оптимизация: вычисляем итоговую матрицу трансформации один раз
         Matrix rotation = Matrix.createYSpinMatrix(rotationAngle);
+        Matrix finalMatrix = transformationMatrix.multiply(rotation);
 
-        pyramid.transformedPolygons = applyRotationToPolygons(pyramid.polygons, rotation);
-        cone.transformedPolygons = applyRotationToPolygons(cone.polygons, rotation);
-        star.transformedPolygons = applyRotationToPolygons(star.polygons, rotation);
+        pyramid.transformedPolygons = applyMatrixToPolygons(pyramid.polygons, finalMatrix, rotation);
+        cone.transformedPolygons = applyMatrixToPolygons(cone.polygons, finalMatrix, rotation);
+        star.transformedPolygons = applyMatrixToPolygons(star.polygons, finalMatrix, rotation);
     }
 
-    private List<Vertex[]> applyRotationToPolygons(List<Vertex[]> polygons, Matrix rotation) {
+    // Оптимизированный метод применения матрицы трансформации
+    private List<Vertex[]> applyMatrixToPolygons(List<Vertex[]> polygons, Matrix finalMatrix, Matrix rotation) {
         return polygons.stream()
                 .map(poly -> {
                     Vertex[] transformed = new Vertex[poly.length];
                     for (int i = 0; i < poly.length; i++) {
-                        Vector transformedValue = transformationMatrix.multiply(rotation).multiply(poly[i].value);
+                        Vector transformedValue = finalMatrix.multiply(poly[i].value);
                         Vector transformedNormal = rotation.multiply(poly[i].normal).normalize();
                         transformed[i] = new Vertex(transformedValue, transformedNormal);
                     }
@@ -162,9 +191,22 @@ public class MyForm extends Application {
         // Сортировка по глубине для оптимизации
         allPolygons.sort((p1, p2) -> Double.compare(p2.avgDepth, p1.avgDepth));
 
+        // Рендеринг с учетом back-face culling
         for (PolygonWithColor p : allPolygons) {
-            drawPolygonWithZBuffer(p.polygon, gc, p.color);
+            if (!isBackFace(p.polygon)) { // Пропускаем невидимые полигоны
+                drawPolygonWithZBuffer(p.polygon, gc, p.color);
+            }
         }
+    }
+
+    // Метод для проверки, является ли полигон невидимым (back-face culling)
+    private boolean isBackFace(Vertex[] polygon) {
+        if (polygon.length < 3) return true;
+        Vector v1 = polygon[1].value.subtract(polygon[0].value);
+        Vector v2 = polygon[2].value.subtract(polygon[0].value);
+        Vector normal = Vector.vectorMultiplication(v1, v2).normalize();
+        Vector viewDir = new Vector(0, 0, -1); // Направление камеры (может быть настроено под твою сцену)
+        return normal.getX() * viewDir.getX() + normal.getY() * viewDir.getY() + normal.getZ() * viewDir.getZ() > 0;
     }
 
     private static class PolygonWithColor {
@@ -179,33 +221,28 @@ public class MyForm extends Application {
         }
     }
 
-    // Новый метод для отрисовки полигона с Z-буфером и освещением по Гуро
     private void drawPolygonWithZBuffer(Vertex[] polygon, GraphicsContext gc, Color baseColor) {
         if (polygon.length < 3) return;
 
-        // Находим минимальные и максимальные координаты для ограничивающего прямоугольника
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
 
         for (Vertex v : polygon) {
-            int x = (int)v.value.getX();
-            int y = (int)v.value.getY();
+            int x = (int) v.value.getX();
+            int y = (int) v.value.getY();
             minX = Math.min(minX, x);
             maxX = Math.max(maxX, x);
             minY = Math.min(minY, y);
             maxY = Math.max(maxY, y);
         }
 
-        // Ограничиваем область сканирования
         minX = Math.max(0, minX);
-        maxX = Math.min((int)gc.getCanvas().getWidth() - 1, maxX);
+        maxX = Math.min((int) gc.getCanvas().getWidth() - 1, maxX);
         minY = Math.max(0, minY);
-        maxY = Math.min((int)gc.getCanvas().getHeight() - 1, maxY);
+        maxY = Math.min((int) gc.getCanvas().getHeight() - 1, maxY);
 
-        // Источник света
         Vector lightDir = new Vector(0, 0, -1).normalize();
 
-        // Для освещения по Гуро вычисляем интенсивность для каждой вершины
         double[] intensities = new double[polygon.length];
         for (int i = 0; i < polygon.length; i++) {
             Vector normal = polygon[i].normal.normalize();
@@ -214,14 +251,11 @@ public class MyForm extends Application {
                     normal.getZ() * lightDir.getZ());
         }
 
-        // Сканируем область полигона
         for (int y = minY; y <= maxY; y++) {
             for (int x = minX; x <= maxX; x++) {
                 if (isPointInsidePolygon(x, y, polygon)) {
-                    // Интерполируем Z-координату
                     double z = interpolateZ(x, y, polygon);
                     if (zBuffer.checkAndUpdate(x, y, z)) {
-                        // Интерполируем интенсивность для освещения по Гуро
                         double intensity = interpolateIntensity(x, y, polygon, intensities);
                         Color shadedColor = baseColor.deriveColor(0, 1, intensity, 1);
                         gc.setFill(shadedColor);
@@ -232,7 +266,6 @@ public class MyForm extends Application {
         }
     }
 
-    // Проверка, находится ли точка внутри полигона
     private boolean isPointInsidePolygon(int x, int y, Vertex[] polygon) {
         int i, j;
         boolean inside = false;
@@ -246,11 +279,8 @@ public class MyForm extends Application {
         return inside;
     }
 
-    // Интерполяция Z-координаты
     private double interpolateZ(int x, int y, Vertex[] polygon) {
-        // Используем барицентрические координаты для интерполяции (работает только для треугольников)
         if (polygon.length != 3) {
-            // Для полигонов с количеством вершин != 3 возвращаем среднее значение
             double avgZ = 0;
             for (Vertex v : polygon) {
                 avgZ += v.value.getZ();
@@ -278,10 +308,8 @@ public class MyForm extends Application {
                 w3 * polygon[2].value.getZ();
     }
 
-    // Интерполяция интенсивности освещения
     private double interpolateIntensity(int x, int y, Vertex[] polygon, double[] intensities) {
         if (polygon.length != 3) {
-            // Для полигонов с количеством вершин != 3 возвращаем среднее значение
             double avgIntensity = 0;
             for (double intensity : intensities) {
                 avgIntensity += intensity;
@@ -307,7 +335,6 @@ public class MyForm extends Application {
         return w1 * intensities[0] + w2 * intensities[1] + w3 * intensities[2];
     }
 
-    // Вычисление площади треугольника
     private double calculateTriangleArea(Vertex v1, Vertex v2, Vertex v3) {
         double x1 = v2.value.getX() - v1.value.getX();
         double y1 = v2.value.getY() - v1.value.getY();
