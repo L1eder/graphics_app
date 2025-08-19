@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class FigureManager {
-    private static final String FILE_NAME = "src/main/java/com/example/course/7.obj";
+    private static final String FILE_NAME = "src/main/java/com/example/course/4.obj";
     private Figure pyramid = new Figure(Color.rgb(0, 0, 200));
     private Figure cone = new Figure(Color.rgb(0, 255, 0));
     private Figure star = new Figure(Color.rgb(255, 255, 0));
@@ -44,9 +44,9 @@ public class FigureManager {
                     }
                     if (currentFigure.equals("Solid")) {
                         pyramid.polygons.add(polygon.toArray(new Vertex[0]));
-                    } else if (currentFigure.equals("Окружность")) {
+                    } else if (currentFigure.equals("Circle")) {
                         star.polygons.add(polygon.toArray(new Vertex[0]));
-                    } else if (currentFigure.equals("Конус")) {
+                    } else if (currentFigure.equals("Cube")) {
                         cone.polygons.add(polygon.toArray(new Vertex[0]));
                     }
                 }
