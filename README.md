@@ -2,15 +2,6 @@
 
 A simple 3D figure renderer built in Java using JavaFX. This project demonstrates how to load and render 3D models, handle transformations, and apply basic lighting effects.
 
-## Table of Contents
-
-- [Features](#features)
-- [Technologies](#technologies)
-- [Project Structure](#project-structure)
-- [How to Run](#how-to-run)
-- [Usage](#usage)
-- [License](#license)
-
 ## Features
 
 - Load 3D models from OBJ files.
